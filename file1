@@ -1,0 +1,46 @@
+import time, datetime, sys
+
+class AccountisDBPollerException(Exception):
+    pass
+
+class DBPoller:
+    def __init__(dbQueue, logger, interval='2', delete=True, markAsUnavailable=True, retryOnError=False):
+        self.dbQueue = dbQueue
+        self.processor = None
+        self.interval = interval
+        self.logger = logger
+        self.delete = delete
+        self.markAsUnavailable = markAsUnavailable
+        self.retryOnError = retryOnError
+
+    def setProcessor(self,processor):
+        self.processor=processor
+
+    @classmethod
+    def poll(self):
+        if not self.processor:
+            raise AccountisDBPollerException('Processor not set. You need to pass a function to self.setProcessor()')
+
+        if self.logger: self.logger.log('Starting to poll')
+
+        while 1:
+            for item in self.dbQueue.objects.filter(availableToPoller=True).order_by('id'):
+                try:
+                    self.processor(item,self.logger)
+                    if self.delete:
+                        self.logger.log('Deleting queue item',item.id)
+                        item.delete()
+                    else if self.markAsUnavailable:
+                        self.logger.log('Marking queue item as unavailable to poller',item.id)
+                        item.availableToPoller=False
+                        item.save()
+                except:
+                    self.logger.logError('Error processing queue object - making object unavailable to poller and saving error details')
+                    
+                    item.exceptionType = "%s", getattr(sys.exc_type, '__name__', sys.exc_type)
+                    item.exceptionValue = "%s", (sys.exc_value)
+                    item.exceptionDate = datetime.datetime.now()
+                    if not self.retryOnError:
+                        item.availableToPoller = False
+                    item.save()
+            time.sleep(self.interval)
